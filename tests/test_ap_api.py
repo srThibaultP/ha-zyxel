@@ -87,6 +87,10 @@ class APTests(unittest.TestCase):
         self.assertEqual(data['clients'][0]['signal_dbm'],-46)
         self.assertEqual(data['clients'][0]['ssid'],'Home')
         self.assertEqual(data['radios']['radio_2g']['SSIDs'],'Home, Guest')
+        self.assertTrue(data['radios']['radio_2g']['Active'])
+        self.assertFalse(data['radios']['radio_5g']['Active'])
+        self.assertEqual(data['ssid_slots']['slot1:3'],{'profile':'p3','ssid':'Guest'})
+        self.assertEqual(data['ssid_slots']['slot2:1'],{'profile':'p2','ssid':'Home'})
         self.assertIsNone(data['radios']['radio_5g']['SSIDs'])
         self.assertEqual(data['device']['cpu_usage'],6)
         self.assertEqual(data['device']['memory_usage'],41)
@@ -94,6 +98,42 @@ class APTests(unittest.TestCase):
         self.assertEqual(data['port'],{'LinkStatus':'2500M/Full','BytesReceived':200,'BytesSent':100})
         self.assertEqual(data['device']['led_suppress'],'Enable')
         self.assertEqual(data['device']['led_locator'],'OFF')
+    def config_client(self, *answers):
+        c=m.NWA50AXClient('http://ap.example','admin','secret')
+        c.sessionkey=True
+        c._request=Mock(side_effect=[response(a) if isinstance(a,str) else a for a in answers])
+        return c
+    def sent(self, client, call=0):
+        return [v for k,v in client._request.call_args_list[call].kwargs['data'] if k=='cmd']
+    OK="var zyshdata0=[];\nvar errno0=0;\n"
+    def test_set_radio(self):
+        c=self.config_client(self.OK);c.set_radio('slot3',False)
+        self.assertEqual(self.sent(c),['wlan slot3','no activate','exit'])
+        self.assertIn(('write','0'),c._request.call_args.kwargs['data'])
+        c=self.config_client(self.OK);c.set_radio('slot3',True)
+        self.assertEqual(self.sent(c),['wlan slot3','activate','exit'])
+    def test_set_ssid(self):
+        c=self.config_client(self.OK);c.set_ssid('slot1',3,None)
+        self.assertEqual(self.sent(c),['wlan slot1','no ssid profile 3','exit'])
+        c=self.config_client(self.OK);c.set_ssid('slot1',3,'Wiz_SSID_7')
+        self.assertEqual(self.sent(c),['wlan slot1','ssid profile 3 Wiz_SSID_7','exit'])
+    def test_set_led_locator(self):
+        c=self.config_client(self.OK);c.set_led_locator(True)
+        self.assertEqual(self.sent(c),['led_locator on'])
+    def test_config_rejects_unsafe_values(self):
+        c=self.config_client()
+        for call in (lambda:c.set_radio('slot9',True),lambda:c.set_ssid('slot1',9,None),
+                     lambda:c.set_ssid('slot1',1,'x\nreboot'),lambda:c.set_ssid('slot1',1,'a b')):
+            with self.assertRaises(api.ZyxelConnectionError):call()
+        c._request.assert_not_called()
+    def test_config_refused(self):
+        for answer in ('',"var zyshdata0=[];\nvar errno0=-1;\n"):
+            c=self.config_client(answer)
+            with self.assertRaises(api.ZyxelConnectionError):c.set_radio('slot1',True)
+    def test_config_logs_in_again(self):
+        c=self.config_client(response('',302),self.OK);c._login=Mock(side_effect=lambda:setattr(c,'sessionkey',True))
+        c.set_radio('slot1',True)
+        c._login.assert_called_once()
     def test_uptime_without_days(self):
         self.assertEqual(m._uptime_seconds('08:37:53'),8*3600+37*60+53)
         self.assertEqual(m._uptime_seconds('1 day 00:00:01'),86401)

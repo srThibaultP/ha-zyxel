@@ -1,4 +1,4 @@
-"""Read-only zysh-cgi client for Zyxel NWA standalone access points (experimental)."""
+"""zysh-cgi client for Zyxel NWA standalone access points (experimental)."""
 from __future__ import annotations
 
 import ast
@@ -38,6 +38,9 @@ MAX_RESPONSE = 2_000_000
 # Models that share the NWA standalone web UI and zysh-cgi API.
 SUPPORTED_MODELS = {"NWA50AX", "NWA50BE", "NWA130BE"}
 SLOT_BANDS = {"1": "radio_2g", "2": "radio_5g", "3": "radio_6g"}
+BAND_SLOTS = {band: f"slot{number}" for number, band in SLOT_BANDS.items()}
+MAX_SSIDS_PER_RADIO = 8
+PROFILE_NAME = re.compile(r"[A-Za-z0-9_-]{1,31}")
 
 
 class LoginForm(HTMLParser):
@@ -101,26 +104,34 @@ def _client(station):
     }
 
 
-def _radio_ssids(slots, profiles):
-    """Map each radio to the SSID names it broadcasts."""
+def _apply_radio_config(result, slots, profiles):
+    """Add the radio state, SSID names and SSID positions to the result."""
     names = {profile.get("__name"): profile.get("_SSID") for profile in profiles
              if isinstance(profile, dict)}
-    result = {}
+    assignments = {}
     for slot in slots:
         if not isinstance(slot, dict):
             continue
-        band = SLOT_BANDS.get(str(slot.get("__name", "")).removeprefix("slot"))
+        slot_name = str(slot.get("__name", ""))
+        band = SLOT_BANDS.get(slot_name.removeprefix("slot"))
         if band is None:
             continue
+        radio = result["radios"].setdefault(band, {})
+        radio["Active"] = slot.get("_Activate") == "yes"
         ssids = []
-        if slot.get("_Activate") == "yes":
-            for position in range(1, 9):
-                ssid = names.get(slot.get(f"_SSID_profile_{position}"))
-                if ssid and ssid not in ssids:
-                    ssids.append(ssid)
-        # Home Assistant limits a state to 255 characters.
-        result[band] = ", ".join(ssids)[:255] or None
-    return result
+        for position in range(1, MAX_SSIDS_PER_RADIO + 1):
+            profile = slot.get(f"_SSID_profile_{position}")
+            if not profile:
+                continue
+            ssid = names.get(profile) or profile
+            assignments[f"{slot_name}:{position}"] = {"profile": profile, "ssid": ssid}
+            if radio["Active"] and ssid not in ssids:
+                ssids.append(ssid)
+        if profiles:
+            # Home Assistant limits a state to 255 characters.
+            radio["SSIDs"] = ", ".join(ssids)[:255] or None
+    if profiles:
+        result["ssid_slots"] = assignments
 
 
 def normalize_status(parsed):
@@ -195,9 +206,7 @@ def normalize_status(parsed):
                 if isinstance(station, dict) and "_MAC" in station)
             slots.extend(row.get("_slot", []))
             profiles.extend(row.get("_ssid_profile", []))
-    if slots and profiles:
-        for band, ssids in _radio_ssids(slots, profiles).items():
-            result["radios"].setdefault(band, {})["SSIDs"] = ssids
+    _apply_radio_config(result, slots, profiles)
     counts = [radio["Clients"] for radio in result["radios"].values() if "Clients" in radio]
     if counts:
         result["device"]["clients"] = sum(counts)
@@ -319,6 +328,59 @@ class NWA50AXClient:
                     raise ZyxelAuthenticationError("AP session expired after login")
                 return normalize_status(parse_response(response.text))
             raise ZyxelConnectionError("AP returned no data")
+
+    def run_config(self, commands):
+        """Run configuration commands the way the AP web interface does.
+
+        The interface sends `wlan slotN`, the change and `exit` with no
+        `configure terminal`, which makes the AP answer with an empty body.
+        write=0 applies the change to the running configuration.
+        """
+        with self._lock:
+            for attempt in range(2):
+                if not self.sessionkey:
+                    self._login()
+                response = self._request("POST", "/cgi-bin/zysh-cgi", data=[
+                    ("filter", "js2"), *[("cmd", command) for command in commands],
+                    ("write", "0")])
+                if response.status_code in (301, 302, 303, 307, 308) or "name=\"CSRFToken\"" in response.text:
+                    self.sessionkey = None
+                    if attempt == 0:
+                        continue
+                    raise ZyxelAuthenticationError("AP session expired after login")
+                parsed = parse_response(response.text)
+                for key, value in parsed.items():
+                    if key.startswith("errno") and value != 0:
+                        raise ZyxelConnectionError("AP refused the command")
+                return
+            raise ZyxelConnectionError("AP returned no data")
+
+    def set_radio(self, slot, active):
+        """Turn one radio on or off."""
+        self._check_slot(slot)
+        self.run_config([f"wlan {slot}", "activate" if active else "no activate", "exit"])
+
+    def set_ssid(self, slot, position, profile):
+        """Put an SSID profile on a radio, or remove it when profile is None."""
+        self._check_slot(slot)
+        if not 1 <= position <= MAX_SSIDS_PER_RADIO:
+            raise ZyxelConnectionError("Invalid SSID position")
+        if profile is None:
+            command = f"no ssid profile {position}"
+        elif PROFILE_NAME.fullmatch(profile):
+            command = f"ssid profile {position} {profile}"
+        else:
+            raise ZyxelConnectionError("Invalid SSID profile name")
+        self.run_config([f"wlan {slot}", command, "exit"])
+
+    def set_led_locator(self, active):
+        """Start or stop the blinking locator LED."""
+        self.run_config([f"led_locator {'on' if active else 'off'}"])
+
+    @staticmethod
+    def _check_slot(slot):
+        if slot not in BAND_SLOTS.values():
+            raise ZyxelConnectionError("Invalid radio slot")
 
     def close(self):
         with self._lock:
