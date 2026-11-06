@@ -25,6 +25,16 @@ var zyshdata2=[{'_Slot1':'6 (20 MHz)','_Slot2':'44 (80 MHz)'}];
 var errno2=0;
 """
 
+NWA130BE_DATA = """var zyshdata0=[{'_model':'NWA130BE','_firmware_version':'V7.40(ACIL.2)'}];
+var errno0=0;
+var zyshdata1=[{'_Slot1':'9 (20 MHz)','_Slot2':'100 (80 MHz)','_Slot3':'53 (320 MHz)'}];
+var errno1=0;
+var zyshdata2=[{'_Slot':[{'__name':'1','_wlanReceivedByte':'2261266762','_TxPower':'11','_Channel_Utilization':'19'},{'__name':'2','_wlanReceivedByte':'13866917221','_TxPower':'20','_Channel_Utilization':'2'},{'__name':'3','_wlanReceivedByte':'2895405376','_TxPower':'23','_Channel_Utilization':'0'}]}];
+var errno2=0;
+var zyshdata3=[{'_Zyxel_Cloud':'This access point is not connected to the Nebula. '}];
+var errno3=0;
+"""
+
 def response(text, status=200, headers=None):
     return types.SimpleNamespace(text=text,status_code=status,headers=headers or {})
 
@@ -46,6 +56,12 @@ class APTests(unittest.TestCase):
         data=m.normalize_status(m.parse_response(DATA.replace("'NWA50AX'","'NWA50BE'")))
         self.assertEqual(data['device']['model'],'NWA50BE')
         self.assertEqual(data['radios']['radio_5g']['TxPower'],23)
+    def test_nwa130be_tri_band(self):
+        data=m.normalize_status(m.parse_response(NWA130BE_DATA))
+        self.assertEqual(data['device']['model'],'NWA130BE')
+        self.assertEqual(data['radios']['radio_6g']['Channel'],'53 (320 MHz)')
+        self.assertEqual(data['radios']['radio_6g']['TxPower'],23)
+        self.assertEqual(data['radios']['radio_6g']['ChannelUtilization'],0)
     def test_6ghz_slot(self):
         data=m.normalize_status(m.parse_response(DATA.replace("'_Slot2':'44 (80 MHz)'","'_Slot2':'44 (80 MHz)','_Slot3':'37 (320 MHz)'")))
         self.assertEqual(data['radios']['radio_6g']['Channel'],'37 (320 MHz)')

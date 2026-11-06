@@ -27,7 +27,7 @@ COMMANDS = (
 )
 MAX_RESPONSE = 2_000_000
 # Models that share the NWA standalone web UI and zysh-cgi API.
-SUPPORTED_MODELS = {"NWA50AX", "NWA50BE"}
+SUPPORTED_MODELS = {"NWA50AX", "NWA50BE", "NWA130BE"}
 SLOT_BANDS = {"1": "radio_2g", "2": "radio_5g", "3": "radio_6g"}
 
 

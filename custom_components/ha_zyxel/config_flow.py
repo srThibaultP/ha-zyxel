@@ -22,7 +22,7 @@ nr7101_logger.setLevel(logging.WARNING)
 
 DATA_SCHEMA = vol.Schema(
     {
-        vol.Required("device_type", default="router"): vol.In({"router": "Router (existing support)", "nwa50ax": "NWA access point: NWA50AX / NWA50BE (experimental)"}),
+        vol.Required("device_type", default="router"): vol.In({"router": "Router (existing support)", "nwa50ax": "NWA access point: NWA50AX / NWA50BE / NWA130BE (experimental)"}),
         vol.Required(CONF_HOST, default=DEFAULT_HOST): str,
         vol.Required(CONF_USERNAME, default=DEFAULT_USERNAME): str,
         vol.Required(CONF_PASSWORD): str,
@@ -102,7 +102,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.error("Connection attempt failed: %s", err)
                 errors["base"] = "cannot_connect"
 
-            if not success and user_input.get("device_type") != "nwa50ax" and "https" not in user_input["host"]:
+            if not success and "https" not in user_input["host"]:
                 _LOGGER.info("User specified http but it failed, trying https...")
                 user_input["host"] = user_input["host"].replace("http://", "https://")
                 try:
