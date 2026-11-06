@@ -24,6 +24,15 @@ COMMANDS = (
     "show wireless-hal statistic",
     "show fqdn",
     "show nebula cloud status",
+    "show wireless-hal station number",
+    "show wireless-hal station info",
+    "show wlan-ssid-profile all",
+    "show cpu status",
+    "show mem status",
+    "show system uptime",
+    "show port status",
+    "show led_suppress status",
+    "show led_locator status",
 )
 MAX_RESPONSE = 2_000_000
 # Models that share the NWA standalone web UI and zysh-cgi API.
@@ -62,9 +71,62 @@ def parse_response(text):
     return result
 
 
+def _leading_int(value):
+    """Return the number starting a value such as '41%', or None."""
+    match = re.match(r"\s*(-?\d+)", value) if isinstance(value, str) else None
+    return int(match[1]) if match else None
+
+
+def _uptime_seconds(value):
+    """Convert an uptime such as '6 days 08:37:53' to seconds, or None."""
+    match = re.fullmatch(r"\s*(?:(\d+)\s+days?\s+)?(\d+):(\d+):(\d+)\s*", value)
+    if not match:
+        return None
+    days, hours, minutes, seconds = (int(part or 0) for part in match.groups())
+    return ((days * 24 + hours) * 60 + minutes) * 60 + seconds
+
+
+def _client(station):
+    """Keep the useful fields of one connected WiFi client."""
+    return {
+        "mac": station.get("_MAC"),
+        "ip": station.get("_IPv4"),
+        "ssid": station.get("_Display_SSID") or station.get("_SSID"),
+        "band": station.get("_Band"),
+        "signal_dbm": _leading_int(station.get("_RSSI_dBm")),
+        "tx_rate": station.get("_TxRate"),
+        "rx_rate": station.get("_RxRate"),
+        "capability": station.get("_Capability"),
+        "connected_since": station.get("_Time"),
+    }
+
+
+def _radio_ssids(slots, profiles):
+    """Map each radio to the SSID names it broadcasts."""
+    names = {profile.get("__name"): profile.get("_SSID") for profile in profiles
+             if isinstance(profile, dict)}
+    result = {}
+    for slot in slots:
+        if not isinstance(slot, dict):
+            continue
+        band = SLOT_BANDS.get(str(slot.get("__name", "")).removeprefix("slot"))
+        if band is None:
+            continue
+        ssids = []
+        if slot.get("_Activate") == "yes":
+            for position in range(1, 9):
+                ssid = names.get(slot.get(f"_SSID_profile_{position}"))
+                if ssid and ssid not in ssids:
+                    ssids.append(ssid)
+        # Home Assistant limits a state to 255 characters.
+        result[band] = ", ".join(ssids)[:255] or None
+    return result
+
+
 def normalize_status(parsed):
     """Expose only explicitly supported device and radio values."""
-    result = {"device": {}, "radios": {}}
+    result = {"device": {}, "radios": {}, "clients": []}
+    slots, profiles = [], []
     fields = {"_model": "model", "_firmware_version": "firmware",
               "_host_name": "name", "_IP_Address": "ip_address",
               "_Nebula_Cloud_status": "nebula_status",
@@ -88,7 +150,11 @@ def normalize_status(parsed):
             for slot, band in SLOT_BANDS.items():
                 value = row.get("_Slot" + slot)
                 if isinstance(value, str):
-                    result["radios"].setdefault(band, {})["Channel"] = value
+                    # Same field in two commands: a channel reads '9 (20 MHz)',
+                    # a client count from "station number" is a bare number.
+                    target = "Clients" if value.strip().isdigit() else "Channel"
+                    radio = result["radios"].setdefault(band, {})
+                    radio[target] = int(value) if target == "Clients" else value
             for radio in row.get("_Slot", []):
                 if not isinstance(radio, dict):
                     continue
@@ -103,6 +169,38 @@ def normalize_status(parsed):
                         continue
                     if value >= 0:
                         values[target] = value
+            for source, target in (("_CPU_utilization", "cpu_usage"),
+                                   ("_memory_usage", "memory_usage")):
+                value = _leading_int(row.get(source))
+                if value is not None:
+                    result["device"][target] = value
+            if isinstance(row.get("_system_uptime"), str):
+                value = _uptime_seconds(row["_system_uptime"])
+                if value is not None:
+                    result["device"]["uptime"] = value
+            for source, target in (("_Suppress_Mode_Status", "led_suppress"),
+                                   ("_Locator_LED_Status", "led_locator")):
+                if isinstance(row.get(source), str):
+                    result["device"][target] = row[source]
+            if row.get("_Port") == "1":
+                port = result.setdefault("port", {})
+                if isinstance(row.get("_Status"), str):
+                    port["LinkStatus"] = row["_Status"]
+                for source, target in (("_RxBytes", "BytesReceived"), ("_TxBytes", "BytesSent")):
+                    value = _leading_int(row.get(source))
+                    if value is not None and value >= 0:
+                        port[target] = value
+            result["clients"].extend(
+                _client(station) for station in row.get("_index", [])
+                if isinstance(station, dict) and "_MAC" in station)
+            slots.extend(row.get("_slot", []))
+            profiles.extend(row.get("_ssid_profile", []))
+    if slots and profiles:
+        for band, ssids in _radio_ssids(slots, profiles).items():
+            result["radios"].setdefault(band, {})["SSIDs"] = ssids
+    counts = [radio["Clients"] for radio in result["radios"].values() if "Clients" in radio]
+    if counts:
+        result["device"]["clients"] = sum(counts)
     model = result["device"].get("model", "").strip().upper()
     if model not in SUPPORTED_MODELS:
         raise ZyxelConnectionError(

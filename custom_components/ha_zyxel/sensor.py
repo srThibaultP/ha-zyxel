@@ -332,10 +332,24 @@ AP_DEVICE_SENSORS = {
     "name": {"name": "Hostname", "icon": "mdi:tag-text", "diagnostic": True},
     "ip_address": {"name": "IP address", "icon": "mdi:ip-network", "diagnostic": True},
     "nebula_status": {"name": "Nebula status", "icon": "mdi:cloud-outline", "diagnostic": True},
+    "clients": {"name": "Clients", "icon": "mdi:account-multiple", "unit": "clients",
+                "state_class": SensorStateClass.MEASUREMENT},
+    "cpu_usage": {"name": "CPU usage", "icon": "mdi:cpu-64-bit", "unit": "%",
+                  "state_class": SensorStateClass.MEASUREMENT, "diagnostic": True},
+    "memory_usage": {"name": "Memory usage", "icon": "mdi:memory", "unit": "%",
+                     "state_class": SensorStateClass.MEASUREMENT, "diagnostic": True},
+    "uptime": {"name": "Uptime", "icon": "mdi:timer-outline", "unit": "s",
+               "suggested_unit": "d", "device_class": SensorDeviceClass.DURATION,
+               "diagnostic": True},
+    "led_suppress": {"name": "LED suppression", "icon": "mdi:led-off", "diagnostic": True},
+    "led_locator": {"name": "LED locator", "icon": "mdi:led-on", "diagnostic": True},
 }
 
 AP_RADIO_SENSORS = {
     "Channel": {"name": "Channel", "icon": "mdi:wifi"},
+    "Clients": {"name": "Clients", "icon": "mdi:account-multiple", "unit": "clients",
+                "state_class": SensorStateClass.MEASUREMENT},
+    "SSIDs": {"name": "SSIDs", "icon": "mdi:wifi-settings"},
     "ChannelUtilization": {"name": "Channel utilization", "icon": "mdi:chart-donut",
                            "unit": "%", "state_class": SensorStateClass.MEASUREMENT},
     "TxPower": {"name": "Transmit power", "icon": "mdi:antenna", "unit": "dBm",
@@ -355,15 +369,33 @@ AP_RADIO_SENSORS = {
 }
 
 
+AP_PORT_SENSORS = {
+    "LinkStatus": {"name": "Ethernet link", "icon": "mdi:ethernet"},
+    "BytesReceived": {"name": "Ethernet data received", "icon": "mdi:download-network",
+                      "unit": "B", "suggested_unit": "GB",
+                      "device_class": SensorDeviceClass.DATA_SIZE,
+                      "state_class": SensorStateClass.TOTAL_INCREASING},
+    "BytesSent": {"name": "Ethernet data sent", "icon": "mdi:upload-network",
+                  "unit": "B", "suggested_unit": "GB",
+                  "device_class": SensorDeviceClass.DATA_SIZE,
+                  "state_class": SensorStateClass.TOTAL_INCREASING},
+}
+
+
 def _ap_description(key: str) -> dict | None:
     """Return name/unit settings for an AP data key, or None to skip it."""
     parts = key.split(".")
     if len(parts) == 2 and parts[0] == "device" and parts[1] in AP_DEVICE_SENSORS:
         return AP_DEVICE_SENSORS[parts[1]]
+    if len(parts) == 2 and parts[0] == "port" and parts[1] in AP_PORT_SENSORS:
+        return AP_PORT_SENSORS[parts[1]]
     if len(parts) == 3 and parts[0] == "radios" and parts[2] in AP_RADIO_SENSORS:
         band = AP_RADIO_LABELS.get(parts[1], parts[1])
         base = AP_RADIO_SENSORS[parts[2]]
-        return {**base, "name": f"{band} {base['name'][0].lower()}{base['name'][1:]}"}
+        name = base["name"]
+        if not name[:2].isupper():  # keep acronyms such as "SSIDs"
+            name = f"{name[0].lower()}{name[1:]}"
+        return {**base, "name": f"{band} {name}"}
     return None
 
 
@@ -371,6 +403,8 @@ class ZyxelAPSensor(AbstractZyxelSensor):
     """A sensor of an NWA access point, named like '5 GHz channel'."""
 
     _attr_has_entity_name = True
+    # The client list changes on every poll and would fill the recorder database.
+    _unrecorded_attributes = frozenset({"clients"})
 
     def __init__(self, coordinator, entry: ConfigEntry, key: str, description: dict):
         """Initialize the sensor."""
@@ -395,3 +429,10 @@ class ZyxelAPSensor(AbstractZyxelSensor):
             return self._get_value_from_path()
         except (KeyError, AttributeError):
             return None
+
+    @property
+    def extra_state_attributes(self):
+        """Return the connected WiFi clients on the total clients sensor."""
+        if self._key != "device.clients":
+            return None
+        return {"clients": self.coordinator.data.get("clients", [])}

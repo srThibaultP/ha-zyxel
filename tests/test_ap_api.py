@@ -35,6 +35,28 @@ var zyshdata3=[{'_Zyxel_Cloud':'This access point is not connected to the Nebula
 var errno3=0;
 """
 
+EXTENDED_DATA = NWA130BE_DATA + """var zyshdata4=[{'_Slot1':'1','_Slot2':'0','_Slot3':'2'}];
+var errno4=0;
+var zyshdata5=[{'_index':[{'__name':'0','_MAC':'aa:bb:cc:dd:ee:01','_IPv4':'192.0.2.10','_SSID':'Home','_Display_SSID':'Home','_RSSI_dBm':'-46','_TxRate':'39M','_RxRate':'72M','_Band':'2.4GHz','_Capability':'802.11b/g/n','_Time':'22:38:49 2026/11/06'}]}];
+var errno5=0;
+var zyshdata6=[{'_slot':[{'__name':'slot1','_Activate':'yes','_SSID_profile_1':'','_SSID_profile_2':'p2','_SSID_profile_3':'p3'},{'__name':'slot2','_Activate':'no','_SSID_profile_1':'p2'}]}];
+var errno6=0;
+var zyshdata7=[{'_ssid_profile':[{'__name':'p2','_SSID':'Home'},{'__name':'p3','_SSID':'Guest'}]}];
+var errno7=0;
+var zyshdata8=[{'_CPU_utilization':'6 %'}];
+var errno8=0;
+var zyshdata9=[{'_memory_usage':'41%'}];
+var errno9=0;
+var zyshdata10=[{'_system_uptime':'6 days 08:37:53'}];
+var errno10=0;
+var zyshdata11=[{'_Port':'1','_Status':'2500M/Full','_TxBytes':'100','_RxBytes':'200'},{'_Port':'2','_Status':'Down','_TxBytes':'0','_RxBytes':'0'}];
+var errno11=0;
+var zyshdata12=[{'_Suppress_Mode_Status':'Enable'}];
+var errno12=0;
+var zyshdata13=[{'_Locator_LED_Status':'OFF'}];
+var errno13=0;
+"""
+
 def response(text, status=200, headers=None):
     return types.SimpleNamespace(text=text,status_code=status,headers=headers or {})
 
@@ -56,6 +78,26 @@ class APTests(unittest.TestCase):
         data=m.normalize_status(m.parse_response(DATA.replace("'NWA50AX'","'NWA50BE'")))
         self.assertEqual(data['device']['model'],'NWA50BE')
         self.assertEqual(data['radios']['radio_5g']['TxPower'],23)
+    def test_extended_status(self):
+        data=m.normalize_status(m.parse_response(EXTENDED_DATA))
+        self.assertEqual(data['radios']['radio_2g']['Channel'],'9 (20 MHz)')
+        self.assertEqual(data['radios']['radio_2g']['Clients'],1)
+        self.assertEqual(data['radios']['radio_5g']['Clients'],0)
+        self.assertEqual(data['device']['clients'],3)
+        self.assertEqual(data['clients'][0]['signal_dbm'],-46)
+        self.assertEqual(data['clients'][0]['ssid'],'Home')
+        self.assertEqual(data['radios']['radio_2g']['SSIDs'],'Home, Guest')
+        self.assertIsNone(data['radios']['radio_5g']['SSIDs'])
+        self.assertEqual(data['device']['cpu_usage'],6)
+        self.assertEqual(data['device']['memory_usage'],41)
+        self.assertEqual(data['device']['uptime'],6*86400+8*3600+37*60+53)
+        self.assertEqual(data['port'],{'LinkStatus':'2500M/Full','BytesReceived':200,'BytesSent':100})
+        self.assertEqual(data['device']['led_suppress'],'Enable')
+        self.assertEqual(data['device']['led_locator'],'OFF')
+    def test_uptime_without_days(self):
+        self.assertEqual(m._uptime_seconds('08:37:53'),8*3600+37*60+53)
+        self.assertEqual(m._uptime_seconds('1 day 00:00:01'),86401)
+        self.assertIsNone(m._uptime_seconds('n/a'))
     def test_nwa130be_tri_band(self):
         data=m.normalize_status(m.parse_response(NWA130BE_DATA))
         self.assertEqual(data['device']['model'],'NWA130BE')
@@ -90,6 +132,15 @@ class APTests(unittest.TestCase):
                 ('cmd', 'show wireless-hal statistic'),
                 ('cmd', 'show fqdn'),
                 ('cmd', 'show nebula cloud status'),
+                ('cmd', 'show wireless-hal station number'),
+                ('cmd', 'show wireless-hal station info'),
+                ('cmd', 'show wlan-ssid-profile all'),
+                ('cmd', 'show cpu status'),
+                ('cmd', 'show mem status'),
+                ('cmd', 'show system uptime'),
+                ('cmd', 'show port status'),
+                ('cmd', 'show led_suppress status'),
+                ('cmd', 'show led_locator status'),
                 ('write', '0'),
             ])
             return response(DATA)

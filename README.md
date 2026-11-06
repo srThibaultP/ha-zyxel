@@ -39,6 +39,8 @@ Access points (experimental; choose "NWA access point" when adding the device):
 - NWA50BE
 - NWA130BE
 
+Access point sensors: channel, channel utilization, transmit power, traffic, client count and broadcast SSIDs per radio; total clients, with the client list (MAC, IP, SSID, band, signal, rates) as an attribute; Ethernet link and traffic; CPU, memory, uptime and LED status. All access point requests are read-only.
+
 Potentially compatible with a lot more devices.
 If you do test and find out your device is working, please submit an issue or a pull request and I'll add it to the list.
 
